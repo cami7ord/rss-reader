@@ -18,14 +18,61 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        /* 1. Synchronous function wrapped in an asynchronous caller.
+
+        Pro: very explicit. Con: quite verbose.
+
+        GlobalScope.launch(netDispatcher) {
+            loadNews()
+        } */
+
+        /* 2. An asynchronous function with a predefined dispatcher.
+
+        Pro: less verbose. Con: not as flexible, the caller can't decide where should it run (pro if that's needed).
+
+        asyncLoadNews() */
+
+        /* 3. An asynchronous function with a flexible dispatcher.
+
+        Pro: less verbose and more flexible. Con: not as explicit, as option 2, depends on naming convention.*/
+
+        asyncLoadNews(netDispatcher)
+
+        // SUMMARY: Try to be flexible, explicit, safe and consistent.
+    }
+
+    // 1. Synchronous function wrapped in an asynchronous caller.
+
+    private fun loadNews() {
+        val headlines = fetchRssHeadlines()
+        val newsCount = findViewById<TextView>(R.id.newsCount)
+        GlobalScope.launch(Dispatchers.Main) {
+            newsCount.text = "Found ${headlines.size} News"
+        }
+    }
+
+
+    // 2. An asynchronous function with a predefined dispatcher.
+
+    private fun asyncLoadNews() =
         GlobalScope.launch(netDispatcher) {
             val headlines = fetchRssHeadlines()
             val newsCount = findViewById<TextView>(R.id.newsCount)
-            launch(Dispatchers.Main) {
+            GlobalScope.launch(Dispatchers.Main) {
                 newsCount.text = "Found ${headlines.size} News"
             }
         }
-    }
+
+    // 3. An asynchronous function with a flexible dispatcher.
+
+    private fun asyncLoadNews(dispatcher: CoroutineDispatcher = netDispatcher) =
+        GlobalScope.launch(dispatcher) {
+            val headlines = fetchRssHeadlines()
+            val newsCount = findViewById<TextView>(R.id.newsCount)
+            GlobalScope.launch(Dispatchers.Main) {
+                newsCount.text = "Found ${headlines.size} News"
+            }
+        }
 
     private fun fetchRssHeadlines(): List<String> {
         val builder = factory.newDocumentBuilder()
