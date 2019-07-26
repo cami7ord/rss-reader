@@ -1,93 +1,81 @@
 package com.example.user.rssreader
 
 import android.os.Bundle
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.coroutines.*
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import javax.xml.parsers.DocumentBuilderFactory
 
+@ExperimentalCoroutinesApi
 @ObsoleteCoroutinesApi
 class MainActivity : AppCompatActivity() {
 
-    private val netDispatcher = newSingleThreadContext(name = "ServiceCall")
+    private val netDispatcher = newFixedThreadPoolContext(2, "IO")
     private val factory = DocumentBuilderFactory.newInstance()
+
+    private val feeds = listOf(
+        "https://www.npr.org/rss/rss.php?id=1001",
+        "http://rss.cnn.com/rss/cnn_topstories.rss",
+        "http://feeds.foxnews.com/foxnews/politics?format=xml",
+        "htt:myNewsFeed"
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        /* 1. Synchronous function wrapped in an asynchronous caller.
+        asyncLoadNews()
 
-        Pro: very explicit. Con: quite verbose.
-
-        GlobalScope.launch(netDispatcher) {
-            loadNews()
-        } */
-
-        /* 2. An asynchronous function with a predefined dispatcher.
-
-        Pro: less verbose. Con: not as flexible, the caller can't decide where should it run (pro if that's needed).
-
-        asyncLoadNews() */
-
-        /* 3. An asynchronous function with a flexible dispatcher.
-
-        Pro: less verbose and more flexible. Con: not as explicit, as option 2, depends on naming convention.*/
-
-        asyncLoadNews(netDispatcher)
-
-        // SUMMARY: Try to be flexible, explicit, safe and consistent.
     }
-
-    // 1. Synchronous function wrapped in an asynchronous caller.
-
-    private fun loadNews() {
-        val headlines = fetchRssHeadlines()
-        val newsCount = findViewById<TextView>(R.id.newsCount)
-        GlobalScope.launch(Dispatchers.Main) {
-            newsCount.text = "Found ${headlines.size} News"
-        }
-    }
-
-
-    // 2. An asynchronous function with a predefined dispatcher.
-
-    private fun asyncLoadNews() =
-        GlobalScope.launch(netDispatcher) {
-            val headlines = fetchRssHeadlines()
-            val newsCount = findViewById<TextView>(R.id.newsCount)
-            GlobalScope.launch(Dispatchers.Main) {
-                newsCount.text = "Found ${headlines.size} News"
-            }
-        }
-
-    // 3. An asynchronous function with a flexible dispatcher.
 
     private fun asyncLoadNews(dispatcher: CoroutineDispatcher = netDispatcher) =
         GlobalScope.launch(dispatcher) {
-            val headlines = fetchRssHeadlines()
-            val newsCount = findViewById<TextView>(R.id.newsCount)
+
+            val requests = mutableListOf<Deferred<List<String>>>()
+            feeds.mapTo(requests) {
+                fetchRssHeadlinesAsync(it, dispatcher)
+            }
+
+            requests.forEach {
+                it.join()
+            }
+
+            val headlines = requests
+                .filter { !it.isCancelled }
+                .flatMap { it.getCompleted() }
+
+            val failed = requests
+                .filter { it.isCancelled }
+                .size
+
+            val obtained = requests.size - failed
+
             GlobalScope.launch(Dispatchers.Main) {
-                newsCount.text = "Found ${headlines.size} News"
+                newsCount.text = "Found ${headlines.size} News in ${obtained} feeds"
+                if (failed > 0) {
+                    warnings.text = "Failed to fetch $failed feeds"
+                }
             }
         }
 
-    private fun fetchRssHeadlines(): List<String> {
-        val builder = factory.newDocumentBuilder()
-        val xml = builder.parse("https://www.npr.org/rss/rss.php?id=1001")
-        val news = xml.getElementsByTagName("channel").item(0)
+    private fun fetchRssHeadlinesAsync(feed: String, dispatcher: CoroutineDispatcher) =
+        GlobalScope.async(dispatcher) {
 
-        return (0 until news.childNodes.length)
-            .asSequence()
-            .map { news.childNodes.item(it) }
-            .filter { Node.ELEMENT_NODE == it.nodeType }
-            .map { it as Element }
-            .filter { "item" == it.tagName }
-            .map {
-                it.getElementsByTagName("title").item(0).textContent
-            }
-            .toList()
-    }
+            val builder = factory.newDocumentBuilder()
+            val xml = builder.parse(feed)
+            val news = xml.getElementsByTagName("channel").item(0)
+
+            (0 until news.childNodes.length)
+                .asSequence()
+                .map { news.childNodes.item(it) }
+                .filter { Node.ELEMENT_NODE == it.nodeType }
+                .map { it as Element }
+                .filter { "item" == it.tagName }
+                .map {
+                    it.getElementsByTagName("title").item(0).textContent
+                }
+                .toList()
+        }
 }
