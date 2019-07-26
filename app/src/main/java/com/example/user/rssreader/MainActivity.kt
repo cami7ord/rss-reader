@@ -1,7 +1,14 @@
 package com.example.user.rssreader
 
 import android.os.Bundle
+import android.view.View
+import android.widget.ProgressBar
 import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.example.user.rssreader.adapter.ArticleAdapter
+import com.example.user.rssreader.model.Article
+import com.example.user.rssreader.model.Feed
 import kotlinx.android.synthetic.main.activity_main.*
 import kotlinx.coroutines.*
 import org.w3c.dom.Element
@@ -12,19 +19,30 @@ import javax.xml.parsers.DocumentBuilderFactory
 @ObsoleteCoroutinesApi
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var articles: RecyclerView
+    private lateinit var viewAdapter: ArticleAdapter
+    private lateinit var viewManager: RecyclerView.LayoutManager
+
     private val netDispatcher = newFixedThreadPoolContext(2, "IO")
     private val factory = DocumentBuilderFactory.newInstance()
-
     private val feeds = listOf(
-        "https://www.npr.org/rss/rss.php?id=1001",
-        "http://rss.cnn.com/rss/cnn_topstories.rss",
-        "http://feeds.foxnews.com/foxnews/politics?format=xml",
-        "htt:myNewsFeed"
+        Feed("npr", "https://www.npr.org/rss/rss.php?id=1001"),
+        Feed("cnn", "http://rss.cnn.com/rss/cnn_topstories.rss"),
+        Feed("fox", "http://feeds.foxnews.com/foxnews/politics?format=xml"),
+        Feed("inv", "htt:myNewsFeed")
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        viewManager = LinearLayoutManager(this)
+        viewAdapter = ArticleAdapter()
+        articles = findViewById<RecyclerView>(R.id.articlesList)
+            .apply {
+                layoutManager = viewManager
+                adapter = viewAdapter
+            }
 
         asyncLoadNews()
 
@@ -33,16 +51,16 @@ class MainActivity : AppCompatActivity() {
     private fun asyncLoadNews(dispatcher: CoroutineDispatcher = netDispatcher) =
         GlobalScope.launch(dispatcher) {
 
-            val requests = mutableListOf<Deferred<List<String>>>()
+            val requests = mutableListOf<Deferred<List<Article>>>()
             feeds.mapTo(requests) {
-                fetchRssHeadlinesAsync(it, dispatcher)
+                fetchArticlesAsync(it, dispatcher)
             }
 
             requests.forEach {
                 it.join()
             }
 
-            val headlines = requests
+            val articles = requests
                 .filter { !it.isCancelled }
                 .flatMap { it.getCompleted() }
 
@@ -53,18 +71,18 @@ class MainActivity : AppCompatActivity() {
             val obtained = requests.size - failed
 
             GlobalScope.launch(Dispatchers.Main) {
-                newsCount.text = "Found ${headlines.size} News in ${obtained} feeds"
-                if (failed > 0) {
-                    warnings.text = "Failed to fetch $failed feeds"
-                }
+                findViewById<ProgressBar>(R.id.progressBar).visibility = View.GONE
+                viewAdapter.add(articles)
             }
         }
 
-    private fun fetchRssHeadlinesAsync(feed: String, dispatcher: CoroutineDispatcher) =
+    private fun fetchArticlesAsync(feed: Feed, dispatcher: CoroutineDispatcher) =
         GlobalScope.async(dispatcher) {
 
+            delay(1000)
+
             val builder = factory.newDocumentBuilder()
-            val xml = builder.parse(feed)
+            val xml = builder.parse(feed.url)
             val news = xml.getElementsByTagName("channel").item(0)
 
             (0 until news.childNodes.length)
@@ -74,7 +92,14 @@ class MainActivity : AppCompatActivity() {
                 .map { it as Element }
                 .filter { "item" == it.tagName }
                 .map {
-                    it.getElementsByTagName("title").item(0).textContent
+                    val title = it.getElementsByTagName("title").item(0).textContent
+                    var summary = it.getElementsByTagName("description").item(0).textContent
+
+                    if (!summary.startsWith("<div") && summary.contains("<div")) {
+                        summary = summary.substring(0, summary.indexOf("<div"))
+                    }
+
+                    Article(feed.name, title, summary)
                 }
                 .toList()
         }
